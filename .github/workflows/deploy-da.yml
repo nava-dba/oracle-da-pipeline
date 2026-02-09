@@ -74,8 +74,13 @@ jobs:
             --git-branch main \
             --env-vars TF_VAR_ibmcloud_api_key=${{ secrets.IBMCLOUD_API_KEY }} \
             || true
-
+      
       - name: Apply Schematics Workspace
         run: |
           WS_ID=$(ibmcloud schematics workspace list | grep oracle-da | awk '{print $1}')
-          ibmcloud schematics workspace apply --id "$WS_ID" --force
+          echo "Workspace ID: $WS_ID"
+
+          ibmcloud schematics workspace action apply \
+            --id "$WS_ID" \
+            --force
+
