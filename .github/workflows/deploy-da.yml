@@ -33,6 +33,7 @@ jobs:
             elif [[ "${{ github.event.comment.body }}" == *"/run si"* ]]; then
               DEPLOY="si"
             else
+              echo "Invalid command. Use '/run rac' or '/run si'"
               exit 1
             fi
           fi
@@ -47,37 +48,62 @@ jobs:
           ibmcloud plugin uninstall schematics -f || true
           ibmcloud plugin install schematics -f
 
-      - name: Login to IBM Cloud (Schematics account)
+      - name: Login to IBM Cloud
         env:
           IC_API_KEY: ${{ secrets.IC_API_KEY }}
         run: |
           ibmcloud login --apikey "$IC_API_KEY" -r us-south
+          ibmcloud target -g default
 
-      - name: Create or Update Workspace
+      - name: Set workspace variables
         run: |
           if [[ "$DEPLOY" == "rac" ]]; then
-            WS_NAME="oracle-da-rac"
-            DIR="solutions/private/rac"
+            echo "WS_NAME=oracle-da-rac" >> $GITHUB_ENV
+            echo "GIT_FOLDER=solutions/private/rac" >> $GITHUB_ENV
           else
-            WS_NAME="oracle-da-si"
-            DIR="solutions/private/si"
+            echo "WS_NAME=oracle-da-si" >> $GITHUB_ENV
+            echo "GIT_FOLDER=solutions/private/si" >> $GITHUB_ENV
           fi
 
-          ibmcloud schematics workspace create \
-            --name "$WS_NAME" \
+      - name: Check if workspace exists
+        id: check_workspace
+        run: |
+          WS_ID=$(ibmcloud schematics workspace list --output json | jq -r '.workspaces[] | select(.name=="${{ env.WS_NAME }}") | .id' || echo "")
+          echo "WS_ID=$WS_ID" >> $GITHUB_ENV
+          if [[ -z "$WS_ID" ]]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+          else
+            echo "exists=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create workspace (if new)
+        if: steps.check_workspace.outputs.exists == 'false'
+        run: |
+          ibmcloud schematics workspace new \
+            --name "${{ env.WS_NAME }}" \
             --location us-south \
             --resource-group default \
-            --git-repo-url https://github.com/${{ github.repository }} \
-            --git-repo-folder "$DIR" \
-            --git-branch main \
-            || true
-
-      - name: Resolve Workspace ID
-        run: |
-          WS_ID=$(ibmcloud schematics workspace list | grep oracle-da | awk '{print $1}')
+            --template-type terraform_v1.5 \
+            --template-git-url https://github.com/${{ github.repository }} \
+            --template-git-folder "${{ env.GIT_FOLDER }}" \
+            --template-git-branch main \
+            --github-token "${{ secrets.GITHUB_TOKEN }}" \
+            --output json > workspace.json
+          
+          WS_ID=$(jq -r '.id' workspace.json)
           echo "WS_ID=$WS_ID" >> $GITHUB_ENV
 
-      - name: Run Apply Action
+      - name: Update workspace (if exists)
+        if: steps.check_workspace.outputs.exists == 'true'
+        run: |
+          ibmcloud schematics workspace update \
+            --id "${{ env.WS_ID }}" \
+            --template-git-url https://github.com/${{ github.repository }} \
+            --template-git-folder "${{ env.GS_FOLDER }}" \
+            --template-git-branch main \
+            --github-token "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Upload Terraform variables
         env:
           TF_VAR_IBMCLOUD_API_KEY: ${{ secrets.TF_VAR_IBMCLOUD_API_KEY }}
           TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS: ${{ secrets.TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS }}
@@ -85,5 +111,106 @@ jobs:
           TF_VAR_ROOT_PASSWORD: ${{ secrets.TF_VAR_ROOT_PASSWORD }}
           TF_VAR_SSH_PRIVATE_KEY: ${{ secrets.TF_VAR_SSH_PRIVATE_KEY }}
         run: |
-          ibmcloud schematics workspace action apply \
-            --id "$WS_ID"
+          # Create variables JSON file
+          cat > variables.json <<EOF
+          {
+            "variablestore": [
+              {
+                "name": "ibmcloud_api_key",
+                "value": "$TF_VAR_IBMCLOUD_API_KEY",
+                "type": "string",
+                "secure": true
+              },
+              {
+                "name": "ibmcloud_cos_service_credentials",
+                "value": "$TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS",
+                "type": "string",
+                "secure": true
+              },
+              {
+                "name": "ora_db_password",
+                "value": "$TF_VAR_ORA_DB_PASSWORD",
+                "type": "string",
+                "secure": true
+              },
+              {
+                "name": "root_password",
+                "value": "$TF_VAR_ROOT_PASSWORD",
+                "type": "string",
+                "secure": true
+              },
+              {
+                "name": "ssh_private_key",
+                "value": "$TF_VAR_SSH_PRIVATE_KEY",
+                "type": "string",
+                "secure": true
+              }
+            ]
+          }
+          EOF
+          
+          # Upload variables to workspace
+          ibmcloud schematics workspace update \
+            --id "${{ env.WS_ID }}" \
+            --var-file variables.json
+
+      - name: Run Plan
+        run: |
+          ACTIVITY_ID=$(ibmcloud schematics plan \
+            --id "${{ env.WS_ID }}" \
+            --output json | jq -r '.activityid')
+          
+          echo "PLAN_ACTIVITY_ID=$ACTIVITY_ID" >> $GITHUB_ENV
+          echo "Plan initiated with Activity ID: $ACTIVITY_ID"
+
+      - name: Wait for Plan completion
+        run: |
+          echo "Waiting for plan to complete..."
+          for i in {1..60}; do
+            STATUS=$(ibmcloud schematics workspace action --id "${{ env.WS_ID }}" --act-id "${{ env.PLAN_ACTIVITY_ID }}" --output json | jq -r '.status')
+            echo "Plan status: $STATUS"
+            
+            if [[ "$STATUS" == "COMPLETED" ]]; then
+              echo "Plan completed successfully"
+              break
+            elif [[ "$STATUS" == "FAILED" ]]; then
+              echo "Plan failed"
+              exit 1
+            fi
+            
+            sleep 10
+          done
+
+      - name: Run Apply
+        run: |
+          ACTIVITY_ID=$(ibmcloud schematics apply \
+            --id "${{ env.WS_ID }}" \
+            --force \
+            --output json | jq -r '.activityid')
+          
+          echo "APPLY_ACTIVITY_ID=$ACTIVITY_ID" >> $GITHUB_ENV
+          echo "Apply initiated with Activity ID: $ACTIVITY_ID"
+
+      - name: Wait for Apply completion
+        run: |
+          echo "Waiting for apply to complete..."
+          for i in {1..120}; do
+            STATUS=$(ibmcloud schematics workspace action --id "${{ env.WS_ID }}" --act-id "${{ env.APPLY_ACTIVITY_ID }}" --output json | jq -r '.status')
+            echo "Apply status: $STATUS"
+            
+            if [[ "$STATUS" == "COMPLETED" ]]; then
+              echo "Apply completed successfully"
+              break
+            elif [[ "$STATUS" == "FAILED" ]]; then
+              echo "Apply failed"
+              ibmcloud schematics logs --id "${{ env.WS_ID }}" --act-id "${{ env.APPLY_ACTIVITY_ID }}"
+              exit 1
+            fi
+            
+            sleep 30
+          done
+
+      - name: Get outputs
+        if: success()
+        run: |
+          ibmcloud schematics workspace output --id "${{ env.WS_ID }}" --output json
