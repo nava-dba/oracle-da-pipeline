@@ -45,15 +45,17 @@ jobs:
           curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
           ibmcloud --version
 
-      # Login to SCHEMATICS ACCOUNT
-      - name: IBM Cloud Login (Schematics Account)
+      - name: Install / Update Schematics plugin
+        run: |
+          ibmcloud plugin uninstall schematics -f || true
+          ibmcloud plugin install schematics -f
+          ibmcloud schematics version
+
+      - name: IBM Cloud Login (Schematics account)
         env:
           IC_API_KEY: ${{ secrets.IC_API_KEY }}
         run: |
           ibmcloud login --apikey "$IC_API_KEY" -r us-south
-
-      - name: Install Schematics plugin
-        run: ibmcloud plugin install schematics -f
 
       - name: Create or Update Schematics Workspace
         run: |
@@ -72,15 +74,21 @@ jobs:
             --git-repo-url https://github.com/${{ github.repository }} \
             --git-repo-folder "$DIR" \
             --git-branch main \
-            --env-vars TF_VAR_ibmcloud_api_key=${{ secrets.IBMCLOUD_API_KEY }} \
             || true
-      
-      - name: Apply Schematics Workspace
+
+      - name: Get Workspace ID
         run: |
           WS_ID=$(ibmcloud schematics workspace list | grep oracle-da | awk '{print $1}')
-          echo "Workspace ID: $WS_ID"
+          echo "WS_ID=$WS_ID" >> $GITHUB_ENV
 
-          ibmcloud schematics workspace action apply \
+      - name: Apply Schematics Workspace
+        env:
+          TF_VAR_IBMCLOUD_API_KEY: ${{ secrets.TF_VAR_IBMCLOUD_API_KEY }}
+          TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS: ${{ secrets.TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS }}
+          TF_VAR_ORA_DB_PASSWORD: ${{ secrets.TF_VAR_ORA_DB_PASSWORD }}
+          TF_VAR_ROOT_PASSWORD: ${{ secrets.TF_VAR_ROOT_PASSWORD }}
+          TF_VAR_SSH_PRIVATE_KEY: ${{ secrets.TF_VAR_SSH_PRIVATE_KEY }}
+        run: |
+          ibmcloud schematics workspace apply \
             --id "$WS_ID" \
             --force
-
