@@ -1,10 +1,10 @@
-name: Deploy Oracle DA (RAC / Single)
+name: Deploy Oracle DA via Schematics
 
 on:
   workflow_dispatch:
     inputs:
       deployment_type:
-        description: "Choose deployment: rac or single"
+        description: "rac or si"
         required: true
         default: rac
         type: choice
@@ -23,58 +23,59 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    # Concurrency must NOT use env
-    concurrency:
-      group: oracle-da-${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: false
-
     steps:
-      - name: Determine deployment type
+      - name: Determine deployment
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "DEPLOYMENT_DIR=${{ inputs.deployment_type }}" >> $GITHUB_ENV
+            DEPLOY="${{ inputs.deployment_type }}"
           else
             if [[ "${{ github.event.comment.body }}" == *"/run rac"* ]]; then
-              echo "DEPLOYMENT_DIR=rac" >> $GITHUB_ENV
-            elif [[ "${{ github.event.comment.body }}" == *"/run single"* ]]; then
-              echo "DEPLOYMENT_DIR=si" >> $GITHUB_ENV
+              DEPLOY="rac"
+            elif [[ "${{ github.event.comment.body }}" == *"/run si"* ]]; then
+              DEPLOY="si"
             else
-              echo "Invalid /run command"
+              echo "Invalid command. Use /run rac or /run si"
               exit 1
             fi
           fi
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
+          echo "DEPLOY=$DEPLOY" >> $GITHUB_ENV
 
       - name: Install IBM Cloud CLI
         run: |
           curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
           ibmcloud --version
 
-      - name: IBM Cloud Login
+      # Login to SCHEMATICS ACCOUNT
+      - name: IBM Cloud Login (Schematics Account)
         env:
-          IC_API_KEY: ${{ secrets.TF_VAR_IBMCLOUD_API_KEY }}
+          IC_API_KEY: ${{ secrets.IC_API_KEY }}
         run: |
           ibmcloud login --apikey "$IC_API_KEY" -r us-south
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.8
+      - name: Install Schematics plugin
+        run: ibmcloud plugin install schematics -f
 
-      - name: Terraform Init
-        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
-        run: terraform init
+      - name: Create or Update Schematics Workspace
+        run: |
+          if [[ "$DEPLOY" == "rac" ]]; then
+            WS_NAME="oracle-da-rac"
+            DIR="solutions/private/rac"
+          else
+            WS_NAME="oracle-da-si"
+            DIR="solutions/private/si"
+          fi
 
-      - name: Terraform Validate
-        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
-        run: terraform validate
+          ibmcloud schematics workspace create \
+            --name "$WS_NAME" \
+            --location us-south \
+            --resource-group default \
+            --git-repo-url https://github.com/${{ github.repository }} \
+            --git-repo-folder "$DIR" \
+            --git-branch main \
+            --env-vars TF_VAR_ibmcloud_api_key=${{ secrets.IBMCLOUD_API_KEY }} \
+            || true
 
-      - name: Terraform Plan
-        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
-        run: terraform plan
-
-      - name: Terraform Apply
-        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
-        run: terraform apply -auto-approve
+      - name: Apply Schematics Workspace
+        run: |
+          WS_ID=$(ibmcloud schematics workspace list | grep oracle-da | awk '{print $1}')
+          ibmcloud schematics workspace apply --id "$WS_ID" --force
