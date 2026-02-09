@@ -23,8 +23,9 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # Concurrency must NOT use env
     concurrency:
-      group: oracle-da-${{ env.DEPLOYMENT_DIR }}
+      group: oracle-da-${{ github.ref }}
       cancel-in-progress: false
 
     steps:
@@ -36,8 +37,9 @@ jobs:
             if [[ "${{ github.event.comment.body }}" == *"/run rac"* ]]; then
               echo "DEPLOYMENT_DIR=rac" >> $GITHUB_ENV
             elif [[ "${{ github.event.comment.body }}" == *"/run single"* ]]; then
-              echo "DEPLOYMENT_DIR=single" >> $GITHUB_ENV
+              echo "DEPLOYMENT_DIR=si" >> $GITHUB_ENV
             else
+              echo "Invalid /run command"
               exit 1
             fi
           fi
@@ -53,9 +55,8 @@ jobs:
       - name: IBM Cloud Login
         env:
           IC_API_KEY: ${{ secrets.IC_API_KEY }}
-          REGION: us-south
         run: |
-          ibmcloud login --apikey "$IC_API_KEY" -r "$REGION"
+          ibmcloud login --apikey "$IC_API_KEY" -r us-south
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
