@@ -25,7 +25,7 @@ jobs:
 
     # Concurrency must NOT use env
     concurrency:
-      group: oracle-da-${{ github.ref }}
+      group: oracle-da-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
 
     steps:
