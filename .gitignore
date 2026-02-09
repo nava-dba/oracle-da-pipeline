@@ -15,5 +15,3 @@ terraform.tfstate*
 .terraform.tfstate*
 solutions/private/si/input.auto.tfvars
 .vscode
-solutions/private/si/*.tfvars
-solutions/private/rac/*.tfvars

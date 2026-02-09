@@ -1,0 +1,79 @@
+name: Deploy Oracle DA (RAC / Single)
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: "Choose deployment: rac or single"
+        required: true
+        default: rac
+        type: choice
+        options:
+          - rac
+          - single
+
+  issue_comment:
+    types: [created]
+
+jobs:
+  deploy:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.comment.body, '/run')
+
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: oracle-da-${{ env.DEPLOYMENT_DIR }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Determine deployment type
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "DEPLOYMENT_DIR=${{ inputs.deployment_type }}" >> $GITHUB_ENV
+          else
+            if [[ "${{ github.event.comment.body }}" == *"/run rac"* ]]; then
+              echo "DEPLOYMENT_DIR=rac" >> $GITHUB_ENV
+            elif [[ "${{ github.event.comment.body }}" == *"/run single"* ]]; then
+              echo "DEPLOYMENT_DIR=single" >> $GITHUB_ENV
+            else
+              exit 1
+            fi
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install IBM Cloud CLI
+        run: |
+          curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
+          ibmcloud --version
+
+      - name: IBM Cloud Login
+        env:
+          IC_API_KEY: ${{ secrets.IC_API_KEY }}
+          REGION: us-south
+        run: |
+          ibmcloud login --apikey "$IC_API_KEY" -r "$REGION"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform Init
+        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
+        run: terraform plan
+
+      - name: Terraform Apply
+        working-directory: solutions/private/${{ env.DEPLOYMENT_DIR }}
+        run: terraform apply -auto-approve
