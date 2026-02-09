@@ -54,7 +54,7 @@ jobs:
 
       - name: IBM Cloud Login
         env:
-          IC_API_KEY: ${{ secrets.IC_API_KEY }}
+          IC_API_KEY: ${{ secrets.TF_VAR_IBMCLOUD_API_KEY }}
         run: |
           ibmcloud login --apikey "$IC_API_KEY" -r us-south
 
