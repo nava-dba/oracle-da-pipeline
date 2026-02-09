@@ -4,10 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       deployment_type:
-        description: "rac or si"
         required: true
-        default: rac
         type: choice
+        default: rac
         options:
           - rac
           - si
@@ -34,7 +33,6 @@ jobs:
             elif [[ "${{ github.event.comment.body }}" == *"/run si"* ]]; then
               DEPLOY="si"
             else
-              echo "Invalid command. Use /run rac or /run si"
               exit 1
             fi
           fi
@@ -43,21 +41,19 @@ jobs:
       - name: Install IBM Cloud CLI
         run: |
           curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
-          ibmcloud --version
 
-      - name: Install / Update Schematics plugin
+      - name: Install Schematics plugin
         run: |
           ibmcloud plugin uninstall schematics -f || true
           ibmcloud plugin install schematics -f
-          ibmcloud schematics version
 
-      - name: IBM Cloud Login (Schematics account)
+      - name: Login to IBM Cloud (Schematics account)
         env:
           IC_API_KEY: ${{ secrets.IC_API_KEY }}
         run: |
           ibmcloud login --apikey "$IC_API_KEY" -r us-south
 
-      - name: Create or Update Schematics Workspace
+      - name: Create or Update Workspace
         run: |
           if [[ "$DEPLOY" == "rac" ]]; then
             WS_NAME="oracle-da-rac"
@@ -76,12 +72,12 @@ jobs:
             --git-branch main \
             || true
 
-      - name: Get Workspace ID
+      - name: Resolve Workspace ID
         run: |
           WS_ID=$(ibmcloud schematics workspace list | grep oracle-da | awk '{print $1}')
           echo "WS_ID=$WS_ID" >> $GITHUB_ENV
 
-      - name: Apply Schematics Workspace
+      - name: Run Apply Action
         env:
           TF_VAR_IBMCLOUD_API_KEY: ${{ secrets.TF_VAR_IBMCLOUD_API_KEY }}
           TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS: ${{ secrets.TF_VAR_IBMCLOUD_COS_SERVICE_CREDENTIALS }}
@@ -89,6 +85,5 @@ jobs:
           TF_VAR_ROOT_PASSWORD: ${{ secrets.TF_VAR_ROOT_PASSWORD }}
           TF_VAR_SSH_PRIVATE_KEY: ${{ secrets.TF_VAR_SSH_PRIVATE_KEY }}
         run: |
-          ibmcloud schematics workspace apply \
-            --id "$WS_ID" \
-            --force
+          ibmcloud schematics workspace action apply \
+            --id "$WS_ID"
